@@ -1,0 +1,20 @@
+# virtualenv
+bin/
+include/
+lib/
+lib64/
+pip-selfcheck.json
+pyvenv.cfg
+
+# secrets
+.env
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+
+# editor/OS cruft
+.DS_Store

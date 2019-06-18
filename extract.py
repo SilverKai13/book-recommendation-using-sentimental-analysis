@@ -1,172 +1,69 @@
-from pprint import pprint
-import nltk
-import yaml
-import sys
+import argparse
 import os
-import re
+
 import pyrebase
-import time
-import requests
-import json
-import serial
-config = {
-  "apiKey": "AIzaSyDRM3Hu12at3dz_tVjxFnVPMI_eUB9mhLI",
-  "authDomain": "bookreco-75f0d.firebaseapp.com",
-  "databaseURL": "https://bookreco-75f0d.firebaseio.com",
-  "storageBucket": "gs://bookreco-75f0d.appspot.com"
+from dotenv import load_dotenv
 
-}
-firebase = pyrebase.initialize_app(config)
+from sentiment import score_text
 
-db = firebase.database()
+load_dotenv()
 
 
-
-print('Enter Genre:')
-gen = input()
-
-print('Enter Book Name:')
-book = input()
-
-print('Your Comment')
-com = input()
-
-print('Rating 0-5:')
-rat = input()
+def get_db():
+    config = {
+        "apiKey": os.environ["FIREBASE_API_KEY"],
+        "authDomain": os.environ["FIREBASE_AUTH_DOMAIN"],
+        "databaseURL": os.environ["FIREBASE_DATABASE_URL"],
+        "storageBucket": os.environ["FIREBASE_STORAGE_BUCKET"],
+    }
+    firebase = pyrebase.initialize_app(config)
+    return firebase.database()
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Submit a book review and score its sentiment.")
+    parser.add_argument("--genre", help="Book genre")
+    parser.add_argument("--book", help="Book title")
+    parser.add_argument("--comment", help="Review text")
+    parser.add_argument("--rating", type=int, choices=range(0, 6), help="Rating, 0-5")
+    return parser.parse_args()
 
 
+def prompt_for_review():
+    genre = input("Enter Genre: ")
+    book = input("Enter Book Name: ")
+    comment = input("Your Comment: ")
+    while True:
+        raw_rating = input("Rating 0-5: ")
+        try:
+            rating = int(raw_rating)
+        except ValueError:
+            print("Rating must be a whole number.")
+            continue
+        if 0 <= rating <= 5:
+            break
+        print("Rating must be between 0 and 5.")
+    return genre, book, comment, rating
 
-class Splitter(object):
 
-    def __init__(self):
-        self.nltk_splitter = nltk.data.load('tokenizers/punkt/english.pickle')
-        self.nltk_tokenizer = nltk.tokenize.TreebankWordTokenizer()
-
-    def split(self, text):
-        """
-        input format: a paragraph of text
-        output format: a list of lists of words.
-            e.g.: [['this', 'is', 'a', 'sentence'], ['this', 'is', 'another', 'one']]
-        """
-        sentences = self.nltk_splitter.tokenize(text)
-        tokenized_sentences = [self.nltk_tokenizer.tokenize(sent) for sent in sentences]
-        return tokenized_sentences
-
-
-class POSTagger(object):
-
-    def __init__(self):
-        pass
-
-    def pos_tag(self, sentences):
-        pos = [nltk.pos_tag(sentence) for sentence in sentences]
-        #adapt format
-        pos = [[(word, word, [postag]) for (word, postag) in sentence] for sentence in pos]
-        return pos
-
-class DictionaryTagger(object):
-
-    def __init__(self, dictionary_paths):
-        files = [open(path, 'r') for path in dictionary_paths]
-        dictionaries = [yaml.load(dict_file) for dict_file in files]
-        map(lambda x: x.close(), files)
-        self.dictionary = {}
-        self.max_key_size = 0
-        for curr_dict in dictionaries:
-            for key in curr_dict:
-                if key in self.dictionary:
-                    self.dictionary[key].extend(curr_dict[key])
-                else:
-                    self.dictionary[key] = curr_dict[key]
-                    self.max_key_size = max(self.max_key_size, len(key))
-
-    def tag(self, postagged_sentences):
-        return [self.tag_sentence(sentence) for sentence in postagged_sentences]
-
-    def tag_sentence(self, sentence, tag_with_lemmas=False):
-        tag_sentence = []
-        N = len(sentence)
-        if self.max_key_size == 0:
-            self.max_key_size = N
-        i = 0
-        while (i < N):
-            j = min(i + self.max_key_size, N) #avoid overflow
-            tagged = False
-            while (j > i):
-                expression_form = ' '.join([word[0] for word in sentence[i:j]]).lower()
-                expression_lemma = ' '.join([word[1] for word in sentence[i:j]]).lower()
-                if tag_with_lemmas:
-                    literal = expression_lemma
-                else:
-                    literal = expression_form
-                if literal in self.dictionary:
-                    #self.logger.debug("found: %s" % literal)
-                    is_single_token = j - i == 1
-                    original_position = i
-                    i = j
-                    taggings = [tag for tag in self.dictionary[literal]]
-                    tagged_expression = (expression_form, expression_lemma, taggings)
-                    if is_single_token: #if the tagged literal is a single token, conserve its previous taggings:
-                        original_token_tagging = sentence[original_position][2]
-                        tagged_expression[2].extend(original_token_tagging)
-                    tag_sentence.append(tagged_expression)
-                    tagged = True
-                else:
-                    j = j - 1
-            if not tagged:
-                tag_sentence.append(sentence[i])
-                i += 1
-        return tag_sentence
-
-def value_of(sentiment):
-    if sentiment == 'positive': return 1
-    if sentiment == 'negative': return -1
-    return 0
-
-def sentence_score(sentence_tokens, previous_token, acum_score):
-    if not sentence_tokens:
-        return acum_score
+def main():
+    args = parse_args()
+    if args.genre and args.book and args.comment is not None and args.rating is not None:
+        genre, book, comment, rating = args.genre, args.book, args.comment, args.rating
     else:
-        current_token = sentence_tokens[0]
-        tags = current_token[2]
-        token_score = sum([value_of(tag) for tag in tags])
-        if previous_token is not None:
-            previous_tags = previous_token[2]
-            if 'inc' in previous_tags:
-                token_score *= 2.0
-            elif 'dec' in previous_tags:
-                token_score /= 2.0
-            elif 'inv' in previous_tags:
-                token_score *= -1.0
-        return sentence_score(sentence_tokens[1:], current_token, acum_score + token_score)
+        genre, book, comment, rating = prompt_for_review()
 
-def sentiment_score(review):
-    return sum([sentence_score(sentence, None, 0.0) for sentence in review])
-
-if __name__ == "__main__":
-    text = com
-    splitter = Splitter()
-    postagger = POSTagger()
-    dicttagger = DictionaryTagger([ 'dicts/positive.yml', 'dicts/negative.yml',
-                                    'dicts/inc.yml', 'dicts/dec.yml', 'dicts/inv.yml'])
-
-    splitted_sentences = splitter.split(text)
-    pprint(splitted_sentences)
-
-    pos_tagged_sentences = postagger.pos_tag(splitted_sentences)
-    pprint(pos_tagged_sentences)
-
-    dict_tagged_sentences = dicttagger.tag(pos_tagged_sentences)
-    pprint(dict_tagged_sentences)
-
-    print("analyzing sentiment...")
-    score = sentiment_score(dict_tagged_sentences)
-    print("Your score after sentiment analysis:\n")
+    score = score_text(comment)
+    print("Your score after sentiment analysis:")
     print(score)
 
+    data = {"book": book, "genre": genre, "comment": comment, "rating": rating, "score": score}
+    db = get_db()
+    # push() generates a unique key per review, so a second review for the
+    # same book no longer overwrites the first (used to be
+    # db.child("Admin").child(book).set(data), keyed by title alone).
+    db.child("Admin").child(book).push(data)
 
 
-data = {"book":book, "genre":gen, "comment": com, "rating": rat, "score": score }
-db.child("Admin").child(book).set(data)
+if __name__ == "__main__":
+    main()
