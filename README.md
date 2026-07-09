@@ -50,11 +50,11 @@ Reproduce it with `python evaluate.py`.
 The bigger number, and the one I actually wanted, is **lexicon
 coverage: 1.2%**. Only 1.2% of the tokens in a typical review match any
 entry in my dictionaries. The other 98.8% of every review is invisible
-to this scorer. It's not that the scoring logic is wrong (though it was,
-see bug list below) — there just isn't enough dictionary to work with.
-30 positive words and 54 negative words was never going to cover how
-people actually write about movies or books. VADER's lexicon has about
-7,500 entries. That gap is most of the difference in the table above.
+to this scorer. It's not that the scoring logic is wrong — there just
+isn't enough dictionary to work with. 30 positive words and 54 negative
+words was never going to cover how people actually write about movies
+or books. VADER's lexicon has about 7,500 entries. That gap is most of
+the difference in the table above.
 
 ### Where it fails
 
@@ -101,66 +101,26 @@ handful of scattered, mostly unrelated word hits standing in for the
 whole review, and the fix isn't better negation handling — it's a
 lexicon more than 30 words long.
 
-## Bugs fixed in this pass
+## Design notes
 
-This was a student project committed once in 2019 and never touched
-again. Coming back to it, the bugs were bad enough that most of the
-"sentiment analysis" it was doing didn't actually work:
+Reviews for the same book are stored under a generated key
+(`Admin/<book>/<push key>`) rather than the book title, and `two.py`
+averages sentiment and rating across all of a book's reviews at read
+time — the schema is built around a book having many reviews from
+different readers.
 
-- **Reviews overwrote each other.** `extract.py` wrote each review to
-  `Admin/<book title>`, and Firebase `.set()` replaces whatever's
-  there. The second review of any book destroyed the first. Given the
-  entire point is aggregating opinions from multiple readers, this was
-  the worst bug in the repo. Reviews now go under `Admin/<book>/<push
-  key>`, and `two.py` averages sentiment and rating across all reviews
-  for a book at read time.
-- **Negation only looked one token back.** `"not very good"` scored as
-  strongly *positive*. By the time the scorer got to "good", the
-  previous token was "very" (an intensifier), so "not" had already been
-  forgotten. Negation, intensifiers, and diminishers now stay active
-  for a small window of tokens instead of just the one right after
-  them.
-- **The scorer was recursive, one stack frame per token.** A long
-  enough review would blow the stack. It's a loop now.
-- **File handles never closed.** `map(lambda f: f.close(), files)` in
-  Python 3 is lazy — the map object was built and immediately thrown
-  away, so nothing ever ran. Dictionary files now open with `with`.
-- **`yaml.load()` with no `Loader`.** Arbitrary code execution risk,
-  and already deprecated behavior by 2019. Switched to `yaml.safe_load`.
-- **Ratings were never cast to int.** `two.py` sorted them as strings,
-  which happens to work for single digits and breaks the moment
-  ratings go to 10. Ratings are validated and cast to `int` now.
-- **Firebase credentials were hardcoded in plaintext**, in both
-  scripts, committed to a public repo. They're environment variables
-  now, loaded with `python-dotenv`. See `.env.example`.
-- **The whole virtualenv was committed** — `bin/`, `include/`,
-  `pip-selfcheck.json`, hundreds of files that have nothing to do with
-  the project. Removed, and `.gitignore` now covers it.
-- **Both scripts imported `serial`** (pyserial — for talking to
-  hardware over a COM port) **and never used it.** Also unused: `sys`,
-  `os`, `re`, `time`, `requests`, `json`. All gone. The `serial` import
-  in particular meant the project didn't even run on a clean clone
-  without an unrelated hardware library installed.
-- **Both scripts collected `input()` at module level**, outside
-  `if __name__ == "__main__"`. Importing either file — to test it, to
-  reuse the scorer — blocked on four prompts before anything else could
-  happen. CLI input is now behind `argparse`, with prompts as a
-  fallback if no flags are given.
+Negation, intensifiers, and diminishers stay active for a small window
+of tokens after they appear, rather than only affecting the single
+token right after them, so phrases like "not very good" land on the
+negative side.
 
-## A design decision worth calling out
-
-`nltk.pos_tag` used to run on every sentence, tagging each word as noun,
-verb, adjective, and so on. Nothing downstream used it: the dictionary
-tagger matched on raw word form regardless of part of speech, and
-`value_of()` returned 0 for every POS tag it ever saw. So the code paid
-for full POS tagging on every review and threw the result away.
-
-I removed it rather than wiring it up, because the dictionaries
-themselves aren't POS-aware — they're just word and phrase strings.
-Actually using POS tagging (scoring only adjectives/adverbs, or
-splitting entries like "like" the verb from "like" the preposition)
-means redesigning the dictionary format around it, which is a bigger
-project than this cleanup pass. Noted below as future work instead.
+There's no POS tagging. The dictionaries are plain word and phrase
+strings, not tagged by part of speech, so tagging every token as noun,
+verb, adjective, etc. and then never checking that tag would just be
+paying for work the scorer doesn't use. Actually using POS (scoring
+only adjectives/adverbs, or splitting entries like "like" the verb from
+"like" the preposition) would mean redesigning the dictionary format
+around it — noted below as future work.
 
 ## What I'd do differently
 
