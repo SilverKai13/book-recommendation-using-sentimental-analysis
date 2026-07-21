@@ -1,143 +1,143 @@
 # book-recommendation-using-sentimental-analysis
 
-A small sentiment scorer for book reviews, plus a script that ranks books
-in a genre by average rating and by average sentiment score. Reviews and
-ratings go into Firebase.
+A small tool that reads a book review and decides whether it sounds positive
+or negative, then uses that to rank books within a genre alongside their star
+ratings. Reviews and ratings are stored in Firebase, Google's cloud database.
 
-I wrote this early in my degree, mostly to see if I could build a
-sentiment analyzer from scratch instead of importing one. It works, in
-the sense that it runs and produces a number. Whether that number means
-anything is a separate question, and this README has an honest answer:
-mostly no. See the results section.
+I wrote this early in my degree, mostly to see if I could build a sentiment
+scorer from scratch instead of importing one. It works, in the sense that it
+runs and produces a number. Whether that number means anything is a separate
+question, and this README has an honest answer: mostly no. See the results
+section.
 
 ## How the scoring works
 
-No machine learning, no pretrained model. It's a lexicon: five YAML
-files listing words and short phrases tagged `positive`, `negative`,
-`inc` (intensifier, like "very"), `dec` (diminisher, like "barely"), and
-`inv` (negation, like "not").
+No machine learning, no pretrained model. The approach is a lexicon: five
+lists of words and short phrases, each tagged as `positive`, `negative`,
+`inc` (an intensifier, like "very"), `dec` (a diminisher, like "barely"), or
+`inv` (a negation, like "not").
 
-A review gets split into sentences and tokens with NLTK. Each token is
-checked against the dictionaries. Positive words add 1, negative words
-subtract 1. An intensifier doubles whatever comes after it, a diminisher
-halves it, a negation flips the sign. All of that gets summed into one
-number per review. Positive score, positive review.
+A review gets broken into sentences and individual words. Each word is
+checked against the lists. Positive words add 1 to the score, negative words
+subtract 1. An intensifier doubles whatever comes right after it, a
+diminisher halves it, and a negation flips the sign. Add it all up and you
+get one number per review — positive score, positive review.
 
-`sentiment.py` has the scorer as an importable module (`score_text`).
-`extract.py` is the CLI that takes a review and writes it to Firebase.
-`two.py` reads everything back and ranks books within a genre.
+`sentiment.py` has the scorer as a reusable piece of code (`score_text`).
+`extract.py` is the command-line tool that takes a review and saves it to
+Firebase. `two.py` reads everything back and ranks books within a genre.
 
 ## Results
 
-I ran the scorer against NLTK's `movie_reviews` corpus — 2,000 reviews,
-labeled positive or negative, 1,000 each. Not book reviews, but it's a
-labeled sentiment dataset that's easy to get and old enough to fit the
-project's era, and reviews-are-reviews for this purpose. Score
-thresholded at zero: above is positive, at-or-below is negative.
+I tested the scorer against a well-known set of 2,000 movie reviews from
+NLTK (a popular language-processing toolkit), split evenly into positive and
+negative. Not book reviews, but it's a labeled dataset that's easy to get and
+old enough to fit the project's era, and reviews are reviews for this
+purpose. A review counts as "positive" if its score is above zero.
 
 | method                                     | accuracy | precision |
 |---------------------------------------------|---------:|----------:|
 | **This project's lexicon**                   |    0.582 |     0.565 |
-| VADER (NLTK's bundled lexicon scorer)        |    0.635 |     0.598 |
-| TF-IDF + Logistic Regression (80/20 split)   |    0.825 |     0.812 |
+| VADER (a well-known, professionally built lexicon scorer) | 0.635 | 0.598 |
+| TF-IDF + Logistic Regression (a standard machine-learning approach) | 0.825 | 0.812 |
 
-Coin flip is 0.50. My lexicon beats that by a little. VADER, which is
-also just a lexicon but a properly built one, beats mine by five points.
-TF-IDF with a plain logistic regression classifier — no deep learning,
-nothing fancy, and it wasn't even close — beats both by a wide margin.
-Reproduce it with `python evaluate.py`.
+A coin flip gets you 0.50 accuracy. My lexicon beats that by a little. VADER,
+which uses the same basic approach but with a much bigger, carefully built
+word list, beats mine by five points. A standard machine-learning method —
+nothing exotic, just counting word frequency and fitting a simple classifier
+— beats both by a wide margin. You can reproduce this table by running
+`python evaluate.py`.
 
-The bigger number, and the one I actually wanted, is **lexicon
-coverage: 1.2%**. Only 1.2% of the tokens in a typical review match any
-entry in my dictionaries. The other 98.8% of every review is invisible
-to this scorer. It's not that the scoring logic is wrong — there just
-isn't enough dictionary to work with. 30 positive words and 54 negative
-words was never going to cover how people actually write about movies
-or books. VADER's lexicon has about 7,500 entries. That gap is most of
-the difference in the table above.
+The more useful number, though, is **coverage: 1.2%**. Only 1.2% of the
+words in a typical review match anything in my dictionaries. The other
+98.8% of every review is invisible to this scorer — it simply doesn't
+recognize those words at all. The scoring logic itself isn't broken; there
+just isn't enough vocabulary behind it. My lists have 30 positive words and
+54 negative words. VADER's has about 7,500. That gap explains most of the
+difference in the table above.
 
 ### Where it fails
 
-Pulled straight from the confusion matrix, and traced through the
-scorer to see which tokens actually moved the number:
+Pulled straight from the mistakes the scorer made, then traced through to
+see which words actually caused them:
 
 > "stalked does not provide much suspense, though that is what it sets
-> out to do..." (a ~40-sentence review) — actual: negative, predicted:
-> positive (score 1.0)
+> out to do..." (a ~40-sentence review) — actually negative, scored as
+> positive (1.0)
 
-"suspense" isn't in either dictionary — I checked, and my first
-assumption about why this one failed was wrong. What actually happens:
-of ~500 words in the review, only five ever match anything: "love",
-"contrary", two separate "not ... bad" constructions, and one bare
-"good", scattered across unrelated sentences. One of the "not bad"s
-correctly scores negative; the other scores positive, because enough
-unmatched filler words sit between "not" and "bad" that the negation
-window (3 tokens) expires before it reaches it. Five essentially random
-sign flips is not a signal, it's noise that happens to sum to a number.
-This is the coverage problem, not the negation problem.
+"suspense" isn't in either word list — I checked, and my first guess about
+why this one failed was wrong. What actually happens: out of roughly 500
+words in the review, only five ever match anything at all: "love",
+"contrary", two separate instances of "not ... bad", and one plain "good",
+scattered across unrelated sentences. One of the "not bad"s is scored
+correctly as negative; the other is scored as positive, because too many
+unrelated words sit between "not" and "bad" for the negation rule to still
+apply by the time it reaches "bad". Five essentially random sign flips
+aren't a meaningful signal — they're noise that happens to add up to a
+number. This is a coverage problem, not a negation problem.
 
-> "...isn't nearly as dull as this" — actual: negative, predicted:
-> positive (score 2.0)
+> "...isn't nearly as dull as this" — actually negative, scored as
+> positive (2.0)
 
-Same shape of failure. "dull" isn't in either dictionary, so the
-negation logic never even engages here — "isn't nearly as dull" doesn't
-touch the score at all. What actually produces the +2 is "interesting"
-and "too good" showing up elsewhere in the review, completely unrelated
-to the sentence I picked because it sounded relevant to negation.
+Same shape of failure. "dull" isn't in either word list, so the negation
+logic never even gets triggered here — that phrase contributes nothing to
+the score either way. The +2 actually comes from "interesting" and "too
+good" appearing elsewhere in the review, completely unrelated to the
+sentence that looked, at a glance, like the interesting case.
 
-> "capsule: the much anticipated re-adaptation..." — actual: negative,
-> predicted: positive (score 6.0)
+> "capsule: the much anticipated re-adaptation..." — actually negative,
+> scored as positive (6.0)
 
 Six matches across the whole review — "good" four times, "interesting"
-once, "nice" once — none of them near each other, none of them about
-the film as a whole. A word-counting scorer with a 84-word dictionary
-mostly isn't measuring sentiment, it's measuring how many times a
-handful of common words happen to appear, which correlates with
-sentiment about as well as you'd expect.
+once, "nice" once — none of them near each other, none of them actually
+about the film as a whole. With only 84 words in its entire vocabulary,
+this scorer mostly isn't measuring sentiment. It's measuring how many times
+a handful of common words happen to show up, which correlates with actual
+sentiment about as well as you'd expect from that.
 
-The pattern in all three: with 1.2% coverage, most "failures" aren't
-the negation logic getting outsmarted by a clever sentence. They're a
-handful of scattered, mostly unrelated word hits standing in for the
-whole review, and the fix isn't better negation handling — it's a
-lexicon more than 30 words long.
+The pattern across all three examples: with only 1.2% coverage, most of the
+mistakes aren't the negation rule being outsmarted by a clever sentence.
+They're a handful of scattered, mostly irrelevant word matches standing in
+for the whole review. The fix isn't smarter negation handling — it's a
+vocabulary more than 30 words long.
 
 ## Design notes
 
 Reviews for the same book are stored under a generated key
-(`Admin/<book>/<push key>`) rather than the book title, and `two.py`
-averages sentiment and rating across all of a book's reviews at read
-time — the schema is built around a book having many reviews from
-different readers.
+(`Admin/<book>/<push key>`) rather than under the book's title, and `two.py`
+averages sentiment and rating across all of a book's reviews when it reads
+them back. The whole structure assumes a book will have many reviews from
+different readers, not just one.
 
-Negation, intensifiers, and diminishers stay active for a small window
-of tokens after they appear, rather than only affecting the single
-token right after them, so phrases like "not very good" land on the
+Negation, intensifiers, and diminishers stay "active" for a few words after
+they appear, rather than only affecting the single word right after them.
+That's what lets a phrase like "not very good" correctly land on the
 negative side.
 
-There's no POS tagging. The dictionaries are plain word and phrase
-strings, not tagged by part of speech, so tagging every token as noun,
-verb, adjective, etc. and then never checking that tag would just be
-paying for work the scorer doesn't use. Actually using POS (scoring
-only adjectives/adverbs, or splitting entries like "like" the verb from
-"like" the preposition) would mean redesigning the dictionary format
-around it — noted below as future work.
+There's no part-of-speech tagging (labeling each word as a noun, verb,
+adjective, and so on). The word lists are just plain text, not tagged by
+part of speech, so labeling every word that way and then never using the
+label would just be extra work for nothing. Actually using it — for
+example, only scoring adjectives and adverbs, or telling apart different
+meanings of the same word — would mean redesigning the word lists around
+it. That's noted below as future work.
 
 ## What I'd do differently
 
-- The lexicon needs to be roughly 50-100x bigger to cover normal
-  writing. Hand-building word lists doesn't scale; I'd pull from an
-  existing sentiment lexicon (like the one VADER ships with) instead of
-  typing out 84 words by hand.
-- Negation as a fixed token window is a hack, and the "isn't nearly as
-  dull as this" example above shows where it falls over. Real
-  dependency parsing would catch scope properly; that's a much bigger
-  dependency for a small project though.
-- Word-counting can't see "good parts, bad movie" — that needs
-  something that understands the review has structure, not just a bag
-  of tagged tokens.
-- If I were doing this now I'd start with TF-IDF + logistic regression
-  as the baseline, not the finish line — the table above says that
-  plainly.
+- The vocabulary needs to be roughly 50 to 100 times bigger to cover normal
+  writing. Building word lists by hand doesn't scale; I'd pull from an
+  existing sentiment lexicon (like the one VADER uses) instead of typing
+  out 84 words myself.
+- Negation as a fixed word-count window is a shortcut, and the "isn't
+  nearly as dull as this" example above shows where it breaks down. Proper
+  grammatical parsing would handle this correctly, but that's a much
+  heavier dependency for a small project.
+- Simple word-counting can't tell "good parts, bad movie" from "bad parts,
+  good movie" — that requires understanding how a review is structured, not
+  just adding up tagged words.
+- If I were starting this today, I'd begin with the TF-IDF and logistic
+  regression approach as the baseline, not treat it as the advanced option
+  — the results table above makes that case clearly enough on its own.
 
 ## Running it
 
@@ -156,6 +156,7 @@ pytest tests/ -v                             # unit tests
 python evaluate.py                           # the results table above
 ```
 
-Requires a Firebase Realtime Database if you want `extract.py` and
-`two.py` to actually persist anything. `sentiment.py` and `evaluate.py`
-don't need Firebase at all — `score_text()` is a plain function.
+You'll need a Firebase Realtime Database if you want `extract.py` and
+`two.py` to actually save and retrieve anything. `sentiment.py` and
+`evaluate.py` don't need Firebase at all — `score_text()` works as a
+standalone function.
